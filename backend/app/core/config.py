@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     llm_model: str = "claude-opus-5-5"
     llm_enabled: bool = False
+
+    @field_validator("document_encryption_key", "anthropic_api_key", mode="before")
+    @classmethod
+    def _blank_secret_is_unset(cls, v):
+        # `KEY=` in an .env file means "not configured", not an empty secret.
+        return None if v is None or (isinstance(v, str) and not v.strip()) else v
 
     @property
     def llm_available(self) -> bool:

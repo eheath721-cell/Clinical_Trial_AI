@@ -55,15 +55,17 @@ docs/               architecture, privacy/compliance, status
 cp .env.example .env
 ```
 
-Set `DOCUMENT_ENCRYPTION_KEY` in `.env` (generate one with the command below), then:
+```bash
+docker compose up --build
+```
+
+For local testing the defaults in `.env` are enough. With `DOCUMENT_ENCRYPTION_KEY` left blank in development, an ephemeral key is generated, so uploaded files can't be reopened after the API restarts (extracted, accepted facts are kept). Set a real key to keep files readable; it is required in staging/production:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-```bash
-docker compose up --build
-```
+`TRIAL_SOURCE=auto` uses live ClinicalTrials.gov data when reachable. For exactly the data the demo was verified with, set `TRIAL_SOURCE=snapshot` in `.env`.
 
 Open http://localhost:3000 → **Try the Lp(a) demo** (creates an account and the synthetic patient from the product brief) or **Get started** for the guided onboarding. API docs: http://localhost:8000/api/docs.
 
