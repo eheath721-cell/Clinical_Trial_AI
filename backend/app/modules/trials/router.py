@@ -187,14 +187,15 @@ def list_matches(
             continue
         if category and (t.study_category or {}).get("code") not in category:
             continue
-        if max_distance is not None and (not a.nearest_site or a.nearest_site["distance_miles"] > max_distance):
+        if max_distance is not None and (not a.nearest_site or a.nearest_site.get("distance_miles") is None
+                                         or a.nearest_site["distance_miles"] > max_distance):
             continue
         if intervention and not any(intervention.lower() in (i.get("name") or "").lower() for i in t.interventions or []):
             continue
         items.append({"trial": trial_summary(t), "assessment": assessment_out(a), "saved": t.nct_id in saved})
     key = {
         "relevance": lambda x: -x["assessment"]["relevance_score"],
-        "distance": lambda x: (x["assessment"]["nearest_site"] or {}).get("distance_miles", 1e9),
+        "distance": lambda x: (x["assessment"]["nearest_site"] or {}).get("distance_miles") or 1e9,
         "eligibility": lambda x: ({"potentially_eligible": 0, "uncertain": 1, "potentially_ineligible": 2}
                                   [x["assessment"]["classification"]], -x["assessment"]["relevance_score"]),
         "start_date": lambda x: x["trial"]["start_date"] or "",

@@ -103,7 +103,13 @@ class ClinicalTrialsGovSource:
             self.limiter.wait()
             try:
                 resp = self.client.get(f"{self.base}{path}", params=params)
-            except httpx.HTTPError as exc:  # network / DNS / proxy refusal
+            except (httpx.ConnectError, httpx.ProxyError) as exc:  # host unreachable / egress refused: fail fast
+                last_exc = exc
+                if attempt >= 1:
+                    break
+                time.sleep(0.5)
+                continue
+            except httpx.HTTPError as exc:  # timeouts and transient transport errors: back off
                 last_exc = exc
                 time.sleep(2**attempt)
                 continue
@@ -210,11 +216,14 @@ class SourceStatus:
 class TrialRepository:
     """Chooses live vs snapshot according to TRIAL_SOURCE (live | snapshot | auto)."""
 
+    REPROBE_SECONDS = 600
+
     def __init__(self) -> None:
         self.mode = get_settings().trial_source
         self._live: ClinicalTrialsGovSource | None = None
         self._snapshot: SnapshotSource | None = None
         self.live_reachable: bool | None = None
+        self._live_failed_at: float | None = None
 
     @property
     def snapshot(self) -> SnapshotSource:
@@ -229,16 +238,25 @@ class TrialRepository:
         return self._live
 
     def _use_live(self) -> bool:
-        return self.mode == "live" or (self.mode == "auto" and self.live_reachable is not False)
+        if self.mode == "live":
+            return True
+        if self.mode != "auto":
+            return False
+        # in auto mode, retry the live API periodically after a failure
+        return self._live_failed_at is None or time.monotonic() - self._live_failed_at > self.REPROBE_SECONDS
+
+    def _mark_live(self, ok: bool) -> None:
+        self.live_reachable = ok
+        self._live_failed_at = None if ok else time.monotonic()
 
     def search(self, q: SearchQuery) -> tuple[list[TrialRecord], str]:
         if self._use_live():
             try:
                 res = self.live.search(q)
-                self.live_reachable = True
+                self._mark_live(True)
                 return res, "live"
             except SourceUnavailable as exc:
-                self.live_reachable = False
+                self._mark_live(False)
                 log.warning("live trial source unavailable: %s", exc)
                 if self.mode == "live":
                     raise
@@ -248,16 +266,16 @@ class TrialRepository:
         if self._use_live():
             try:
                 rec = self.live.get(nct_id)
-                self.live_reachable = True
+                self._mark_live(True)
                 return rec, "live"
             except SourceUnavailable:
-                self.live_reachable = False
+                self._mark_live(False)
                 if self.mode == "live":
                     raise
         return self.snapshot.get(nct_id), "snapshot"
 
     def status(self) -> SourceStatus:
-        active = "live" if (self._use_live() and self.live_reachable) else ("snapshot" if self.mode != "live" else "live")
+        active = "live" if (self.mode == "live" or (self.mode == "auto" and self.live_reachable)) else "snapshot"
         snap_date = None
         try:
             snap_date = self.snapshot.meta.get("retrieved_at")

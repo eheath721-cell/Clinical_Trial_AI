@@ -13,6 +13,7 @@ Principles
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 from app.models import ClinicalTrial, EligibilityAssessment, PatientProfile, TrialLocation
@@ -55,12 +56,16 @@ def shareable_facts(facts: PatientFacts) -> list[dict]:
     out: list[dict] = []
     if facts.age_years is not None:
         out.append({"key": "age", "label": f"Age: {facts.age_years:g}", "default": True})
-    for lab in facts.labs:
-        if lab.value is None:
-            continue
-        when = f" (measured {lab.collected_on:%b %d, %Y})" if lab.collected_on else ""
-        out.append({"key": f"lab:{lab.ref.fact_id}", "label": f"{lab.name}: {lab.value:g} {lab.unit or ''}{when}".strip(),
-                    "default": lab.analyte == "lpa"})
+    seen_labs: set[tuple] = set()
+    for analyte in dict.fromkeys(lab.analyte for lab in facts.labs):
+        # most recent first; identical value/unit repeats (e.g. typed in and also extracted) are offered once
+        for i, lab in enumerate(facts.labs_for(analyte)):
+            if lab.value is None or (analyte, lab.value, lab.unit) in seen_labs:
+                continue
+            seen_labs.add((analyte, lab.value, lab.unit))
+            when = f" (measured {lab.collected_on:%b %d, %Y})" if lab.collected_on else ""
+            out.append({"key": f"lab:{lab.ref.fact_id}", "label": f"{lab.name}: {lab.value:g} {lab.unit or ''}{when}".strip(),
+                        "default": analyte == "lpa" and i == 0})
     for c in facts.conditions:
         if c.assertion == "present":
             out.append({"key": f"cond:{c.ref.fact_id}", "label": f"Diagnosis: {c.name}", "default": False})
@@ -113,11 +118,9 @@ def build_questions(assessment: EligibilityAssessment | None, location: TrialLoc
     if assessment is not None:
         for q in (assessment.counts or {}).get("_questions", [])[:3]:
             qs.append(q)
-        for m in (assessment.missing_information or [])[:2]:
-            item = m.rstrip("?")
-            if item.lower().startswith(("have you", "are you", "whether")):
-                continue
-            qs.append(f"I don't have a {item[0].lower() + item[1:]} on file. Is that something you would check at screening?")
+        tests = [m for m in (assessment.missing_information or []) if re.search(r"\b(result|score|level)\b", m, re.I)]
+        for m in tests[:2]:  # only measurable items can be "checked at screening"; history questions can't
+            qs.append(f"I don't have a {m[0].lower() + m[1:]} on file. Is that something you would measure at screening?")
     qs += GENERIC_QUESTIONS[1:]
     seen: list[str] = []
     for q in qs:

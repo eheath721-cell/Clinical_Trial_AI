@@ -128,6 +128,17 @@ def logout(request: Request, response: Response, auth: AuthContext = Depends(get
     return {"ok": True}
 
 
+@router.get("/auth/session")
+def session_state(request: Request, db: Session = Depends(get_db)):
+    """Like /auth/me but returns {"user": null} instead of 401, for public pages."""
+    from app.core.security import resolve_session
+
+    sess = resolve_session(db, request.cookies.get(SESSION_COOKIE))
+    if sess is None or not sess.user.is_active:
+        return {"user": None}
+    return {"user": user_out(db, sess.user)}
+
+
 @router.get("/auth/me")
 def me(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
     return user_out(db, auth.user)

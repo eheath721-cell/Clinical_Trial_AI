@@ -171,6 +171,12 @@ def nearest_site(r: TrialRecord, origin: tuple[float, float] | None, location_id
         if best is None or key < best[0]:
             best = (key, idx, d, loc)
     if best is None:
+        # No site with coordinates (e.g. all sites abroad): report the first open site without a distance
+        for idx, loc in enumerate(r.locations):
+            if loc.status in pref:
+                return {"location_id": location_ids[idx] if location_ids and idx < len(location_ids) else None,
+                        "facility": loc.facility, "city": loc.city, "state": loc.state, "country": loc.country,
+                        "site_status": loc.status, "distance_miles": None, "geo_source": None}
         return None
     _, idx, d, loc = best
     return {
@@ -183,14 +189,17 @@ def nearest_site(r: TrialRecord, origin: tuple[float, float] | None, location_id
 def relevance(reasons: list[dict], classification: str, status: str, nearest: dict | None, radius: int | None) -> float:
     """Transparent ranking formula (also documented in the UI):
     topic match (direct 50 / drug 40 / related 20) + eligibility (eligible 25 / uncertain 12)
-    + recruitment (recruiting 10 / not yet 5) + proximity (up to 15 within travel radius)."""
+    + recruitment (recruiting 10 / not yet 5) + proximity (up to 15 within travel radius; -10 when no
+    site has a known distance)."""
     topic = 0
     for rs in reasons:
         topic = max(topic, {"direct": 50 if rs["type"] == "condition" else 40, "related": 20}.get(rs["strength"], 0))
     elig = {"potentially_eligible": 25, "uncertain": 12, "potentially_ineligible": 0}.get(classification, 0)
     rec = {"RECRUITING": 10, "NOT_YET_RECRUITING": 5, "ENROLLING_BY_INVITATION": 2}.get(status, -15)
     prox = 0.0
-    if nearest and radius:
+    if nearest and nearest.get("distance_miles") is None:
+        prox = -10  # sites exist but none has a computable distance (typically outside the patient's country)
+    elif nearest and radius:
         d = nearest["distance_miles"]
         prox = 15 * max(0.0, 1 - d / radius) if d <= radius else (-5 if d > 3 * radius else 0)
     return round(topic + elig + rec + prox, 1)
